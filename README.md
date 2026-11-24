@@ -2,6 +2,8 @@
 
 Queue text prompts in a ChatGPT conversation and let them run in order while you work in another tab.
 
+[Product website and download](https://gptbulk-extension.vercel.app) · [Privacy policy](https://gptbulk-extension.vercel.app/privacy)
+
 ## Install
 
 | Browser | Extensions page |

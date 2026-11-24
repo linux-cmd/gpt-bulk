@@ -8,6 +8,6 @@ Single purpose: Send user-supplied text prompts sequentially in the ChatGPT web 
 Storage: Retains pending prompts and the minimum send state needed to recover an interrupted submission.
 Host access: The extension runs on chatgpt.com to inspect the current conversation, verify completion, and submit the prompts users queue.
 Remote code: None.
-Privacy policy: https://gpt-bulk.vercel.app/privacy
+Privacy policy: https://gptbulk-extension.vercel.app/privacy
 Support: https://github.com/linux-cmd/gpt-bulk/issues
 
