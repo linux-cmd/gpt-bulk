@@ -6,23 +6,49 @@ const assert = require("node:assert/strict");
 
 function mock() {
   window.sent = [];
+  const rollout = location.pathname.endsWith("-rollout");
   const editor = document.querySelector("#prompt-textarea");
   const send = document.querySelector("[data-testid=send-button]");
   const stop = document.querySelector("[data-testid=stop-button]");
   const messages = document.querySelector("main");
+  function setRole(node, role, id) {
+    if (rollout) {
+      node.dataset.chatgptSearchUnitKey = "unit:" + role;
+      node.dataset.chatgptSearchMessageIds = id;
+    } else {
+      node.dataset.messageAuthorRole = role;
+      node.dataset.messageId = id;
+    }
+  }
+  if (rollout) {
+    for (const node of messages.querySelectorAll("[data-message-author-role]")) {
+      setRole(node, node.dataset.messageAuthorRole, node.dataset.messageId);
+      delete node.dataset.messageAuthorRole;
+      delete node.dataset.messageId;
+    }
+    messages.querySelector("button").setAttribute("aria-label", "Copy");
+    editor.removeAttribute("id");
+    editor.setAttribute("role", "textbox");
+    editor.setAttribute("aria-label", "Chat with ChatGPT");
+    editor.closest("form").setAttribute("data-chatgpt-composer", "");
+    send.removeAttribute("data-testid");
+    send.setAttribute("aria-label", "Send");
+    stop.removeAttribute("data-testid");
+    stop.setAttribute("aria-label", "Stop");
+  }
   editor.oninput = () => { send.disabled = !editor.innerText; };
   editor.onpaste = event => {
     event.preventDefault();
     editor.innerHTML = event.clipboardData.getData("text/html");
-    send.disabled = false;
+    if (rollout) setTimeout(() => { send.disabled = false; }, 400);
+    else send.disabled = false;
   };
   send.onclick = () => {
     const text = [...editor.children].map(paragraph => paragraph.textContent).join("\n");
     window.sent.push(text);
     if (window.ignoreSend) return;
     const user = document.createElement("div");
-    user.dataset.messageAuthorRole = "user";
-    user.dataset.messageId = "u" + window.sent.length;
+    setRole(user, "user", "u" + window.sent.length);
     user.style.whiteSpace = "pre-wrap";
     user.textContent = text;
     messages.append(user);
@@ -34,15 +60,15 @@ function mock() {
     stop.hidden = true;
     const article = document.createElement("article");
     const answer = document.createElement("div");
-    answer.dataset.messageAuthorRole = "assistant";
-    answer.dataset.messageId = "a" + window.sent.length;
+    setRole(answer, "assistant", "a" + window.sent.length);
     answer.textContent = "Checking sources…";
     article.append(answer);
+    if (rollout) answer.insertAdjacentHTML("beforeend", '<pre><button aria-label="Copy">Copy code</button></pre>');
     messages.append(article);
   };
   window.finish = () => {
     const button = document.createElement("button");
-    button.setAttribute("aria-label", "Copy response");
+    button.setAttribute("aria-label", rollout ? "Copy" : "Copy response");
     button.textContent = "Copy";
     messages.lastElementChild.append(button);
   };
@@ -73,7 +99,9 @@ async function main() {
     await context.route("https://chatgpt.com/c/*", route => route.fulfill({contentType: "text/html", body: html}));
     const tab = context.pages()[0];
     tab.setDefaultTimeout(10000);
-    const target = "https://chatgpt.com/c/test-conversation";
+    const rollout = Boolean(process.env.GPT_BULK_ROLLOUT);
+    const target = "https://chatgpt.com/c/test-conversation" + (rollout ? "-rollout" : "");
+    const editorSelector = rollout ? '[aria-label="Chat with ChatGPT"]' : "#prompt-textarea";
     await tab.goto(target);
     await tab.getByText("GPT Bulk", {exact: true}).click();
     const add = async text => {
@@ -109,7 +137,7 @@ async function main() {
     try {
       await tab.waitForFunction(() => window.sent.length === 1, null, {polling: 100});
     } catch (error) {
-      console.error(await tab.locator("#status").textContent(), await tab.locator("#prompt-textarea").evaluate(node => node.innerHTML));
+      console.error(await tab.locator("#status").textContent(), await tab.locator(editorSelector).evaluate(node => node.innerHTML));
       throw error;
     }
     assert.deepEqual(await tab.evaluate(() => window.sent), [first]);
@@ -126,18 +154,18 @@ async function main() {
     assert.deepEqual(await tab.evaluate(() => window.sent), [first, "Second prompt"]);
     assert.deepEqual(await other.evaluate(() => window.sent), []);
     await add("Third prompt");
-    await tab.locator("#prompt-textarea").fill("My existing draft");
+    await tab.locator(editorSelector).fill("My existing draft");
     await tab.locator("button#start").click();
     await tab.getByText(/Clear or send the existing/).waitFor();
-    assert.equal(await tab.locator("#prompt-textarea").innerText(), "My existing draft");
+    assert.equal(await tab.locator(editorSelector).innerText(), "My existing draft");
     assert.equal(await tab.evaluate(() => window.sent.length), 2);
-    await tab.locator("#prompt-textarea").fill("");
+    await tab.locator(editorSelector).fill("");
     await tab.evaluate(() => { window.ignoreSend = true; });
     await tab.locator("button#start").click();
     try {
       await tab.waitForFunction(() => window.sent.length === 3, null, {polling: 100});
     } catch (error) {
-      console.error(await tab.locator("#status").textContent(), await tab.locator("#prompt-textarea").evaluate(node => node.innerHTML));
+      console.error(await tab.locator("#status").textContent(), await tab.locator(editorSelector).evaluate(node => node.innerHTML));
       throw error;
     }
     await tab.reload();
