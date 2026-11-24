@@ -10,14 +10,23 @@ function mock() {
   const rollout = location.pathname.endsWith("-rollout");
   const toolbar = location.pathname.endsWith("-toolbar");
   const manual = location.pathname.endsWith("-manual");
+  const controls = location.pathname.endsWith("-controls");
   window.pastesWithoutFocus = 0;
   const editor = document.querySelector("#prompt-textarea");
   const send = document.querySelector("[data-testid=send-button]");
   const stop = document.querySelector("[data-testid=stop-button]");
   const messages = document.querySelector("main");
+  const voice = document.createElement("button");
+  voice.type = "button";
+  voice.setAttribute("aria-label", "Start voice mode");
+  voice.hidden = true;
+  if (controls) editor.closest("form").append(voice);
   if (manual) messages.querySelector("button").remove();
   function setRole(node, role, id) {
-    if (toolbar) {
+    if (controls) {
+      const turn = role === "assistant" && node.parentElement?.matches("article") ? node.parentElement : node;
+      turn.dataset.turn = role;
+    } else if (toolbar) {
       const turn = role === "assistant" && node.parentElement?.matches("article") ? node.parentElement : node;
       turn.dataset.turn = role;
       turn.dataset.turnId = id;
@@ -29,7 +38,7 @@ function mock() {
       node.dataset.messageId = id;
     }
   }
-  if (rollout || toolbar) {
+  if (controls || rollout || toolbar) {
     for (const node of messages.querySelectorAll("[data-message-author-role]")) {
       setRole(node, node.dataset.messageAuthorRole, node.dataset.messageId);
       delete node.dataset.messageAuthorRole;
@@ -63,6 +72,7 @@ function mock() {
     const text = prose?.text() ?? [...editor.children].map(paragraph => [...paragraph.childNodes]
       .map(node => node.nodeName === "BR" ? "\n" : node.textContent).join("")).join("\n\n");
     window.sent.push(text);
+    voice.hidden = true;
     if (window.ignoreSend) return;
     const user = document.createElement("div");
     setRole(user, "user", "u" + window.sent.length);
@@ -90,6 +100,10 @@ function mock() {
     if (toolbar) button.style.visibility = "hidden";
     button.textContent = "Copy";
     messages.lastElementChild.append(button);
+  };
+  window.setIdle = idle => {
+    voice.hidden = !idle;
+    stop.hidden = idle;
   };
 }
 const html = [
@@ -122,8 +136,10 @@ async function main() {
     const rollout = Boolean(process.env.GPT_BULK_ROLLOUT);
     const toolbar = Boolean(process.env.GPT_BULK_TOOLBAR);
     const manual = Boolean(process.env.GPT_BULK_MANUAL);
-    const target = "https://chatgpt.com/c/test-conversation" + (manual ? "-manual" : toolbar ? "-toolbar" : rollout ? "-rollout" : "");
-    const editorSelector = rollout || toolbar ? '[aria-label="Chat with ChatGPT"]' : "#prompt-textarea";
+    const controls = Boolean(process.env.GPT_BULK_CONTROLS);
+    const target = "https://chatgpt.com/c/test-conversation" +
+      (controls ? "-controls" : manual ? "-manual" : toolbar ? "-toolbar" : rollout ? "-rollout" : "");
+    const editorSelector = rollout || toolbar || controls ? '[aria-label="Chat with ChatGPT"]' : "#prompt-textarea";
     await tab.goto(target);
     await tab.getByText("GPT Bulk", {exact: true}).click();
     assert.equal(await tab.locator("[data-inline] + form").count(), 1);
@@ -187,10 +203,18 @@ async function main() {
     await other.getByText("GPT Bulk", {exact: true}).click();
     await other.locator("button#start").evaluate(button => button.click());
     assert.deepEqual(await other.evaluate(() => window.sent), []);
+    if (controls) await tab.getByText("Waiting for ChatGPT to finish…", {exact: true}).waitFor();
     await tab.evaluate(() => window.think());
+    if (controls) await tab.evaluate(() => window.setIdle(true));
     await tab.waitForTimeout(2200);
     assert.deepEqual(await tab.evaluate(() => window.sent), [first]);
-    if (manual) {
+    if (controls) {
+      await tab.evaluate(() => window.setIdle(false));
+      await tab.waitForTimeout(900);
+      await tab.evaluate(() => window.setIdle(true));
+      await tab.waitForTimeout(6200);
+      assert.deepEqual(await tab.evaluate(() => window.sent), [first]);
+    } else if (manual) {
       await confirm.waitFor();
       await confirm.evaluate(button => button.click());
     } else await tab.evaluate(() => window.finish());

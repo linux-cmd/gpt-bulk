@@ -36,19 +36,30 @@
   }
   const sendSelector = 'button[data-testid="send-button"], button[data-test-id="send-button"], button[data-testid="chat-input-send"], button[aria-label="Send"], button[aria-label="Send prompt"], button[aria-label="Send message"], button#composer-submit-button[type="submit"]';
   const stopSelector = '[data-testid="stop-button"], [data-test-id="stop-button"], button[aria-label="Stop generating"], button[aria-label="Stop streaming"], button[aria-label="Stop response"]';
+  const idleSelector = 'button[data-testid="composer-speech-button"], button[data-testid="voice-mode-button"], button[aria-label="Start voice mode"], button[aria-label="Use voice mode"]';
   const composerSelector = 'form[data-chatgpt-composer], form[data-type="unified-composer"]';
   const editorSelector = '#prompt-textarea[contenteditable="true"], [contenteditable="true"][role="textbox"][aria-label="Chat with ChatGPT"], [contenteditable="true"][role="textbox"][aria-label="Message ChatGPT"], [contenteditable="true"][role="textbox"][aria-label="Ask ChatGPT"]';
   const turnSelector = '[data-testid^="conversation-turn-"], [data-test-id^="conversation-turn-"], article, [data-turn-key], [data-turn-id], [data-turn]';
-  const messageSelector = '[data-message-author-role][data-message-id], [data-chatgpt-search-unit-key][data-chatgpt-search-message-ids], [data-turn][data-turn-id]';
+  const messageBodySelector = '[data-message-author-role], [data-chatgpt-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":assistant"]';
+  const turnWrapperSelector = '[data-turn="user"], [data-turn="assistant"]';
+  const messageSelector = messageBodySelector + ", " + turnWrapperSelector;
+  const nodeIds = new WeakMap();
   const replyActions = 'button[data-testid="copy-turn-action-button"], button[data-test-id="copy-turn-action-button"], button[data-testid="good-response-turn-action-button"], button[data-test-id="good-response-turn-action-button"], button[data-testid="bad-response-turn-action-button"], button[data-test-id="bad-response-turn-action-button"], button[aria-label="Copy response"], button[aria-label="Copy"], button[aria-label="Good response"], button[aria-label="Bad response"], button[aria-label="Read aloud"]';
 
   function turns() {
     const messages = new Map();
     for (const node of shown(messageSelector)) {
-      const wrapper = node.matches('[data-turn][data-turn-id]') && !node.matches('[data-message-id], [data-chatgpt-search-message-ids]');
-      if (wrapper && shown('[data-message-author-role][data-message-id], [data-chatgpt-search-unit-key][data-chatgpt-search-message-ids]', node).length) continue;
+      const wrapper = node.matches(turnWrapperSelector) && !node.matches(messageBodySelector);
+      if (wrapper && shown(messageBodySelector, node).length) continue;
       const role = node.dataset.messageAuthorRole || node.dataset.chatgptSearchUnitKey?.split(":").at(-1) || node.dataset.turn;
-      const id = node.dataset.messageId || node.dataset.chatgptSearchMessageIds?.trim().match(/^(?:\["|")?([\w:-]+)(?:"\]|")?$/)?.[1] || node.dataset.turnId;
+      if (role !== "user" && role !== "assistant") continue;
+      const scope = node.closest(turnWrapperSelector) ?? node;
+      let id = node.dataset.messageId || node.dataset.chatgptSearchMessageIds?.trim().match(/^(?:\["|")?([\w:-]+)(?:"\]|")?$/)?.[1] ||
+        scope.dataset.turnId || nodeIds.get(scope);
+      if (!id) {
+        id = "local:" + crypto.randomUUID();
+        nodeIds.set(scope, id);
+      }
       if ((role === "user" || role === "assistant") && id && !messages.has(id)) {
         messages.set(id, {id, role, node});
       }
@@ -73,9 +84,13 @@
       (button.getAttribute("aria-label") !== "Copy" || turn === assistant.node || !assistant.node.contains(button)) &&
       button.getClientRects().length && !button.closest('[hidden], [inert]') &&
       !button.disabled && button.getAttribute("aria-disabled") !== "true"));
-    const busy = shown(stopSelector + ', main [data-is-streaming="true"], main [data-streaming="true"]').length ||
+    const stop = Boolean(shown(stopSelector).length || (form && shown('button[aria-label="Stop"]', form).length));
+    const busy = stop || shown('main [data-is-streaming="true"], main [data-streaming="true"]').length ||
       form?.getAttribute("aria-busy") === "true" || (turn && turn.getAttribute("aria-busy") === "true") ||
-      (form && shown('button[aria-label="Stop"]', form).length);
+      (turn && shown('[data-is-streaming="true"], [data-streaming="true"], [aria-label="Thinking"], [aria-label="Working"]', turn).length);
+    const idle = Boolean(form && (shown(idleSelector, form).some(button =>
+      !button.disabled && button.getAttribute("aria-disabled") !== "true") ||
+      (send && !send.disabled && send.getAttribute("aria-disabled") !== "true")));
     const problem = shown('[role="alert"], [role="dialog"], main button[aria-label="Continue generating"], main button[data-testid="continue-button"]').some(node =>
       /try again|continue generating|something went wrong|rate limit|usage limit|network error|sign in to continue/i.test(
         (node.getAttribute("aria-label") ?? "") + " " + node.textContent));
@@ -88,7 +103,7 @@
       finalActions, turnCount: messages.length,
       waitingFor: !editor || !form ? "the ChatGPT message composer" :
         !user || !turn ? "the latest ChatGPT reply" : "the latest reply’s completion controls",
-      busy, problem, attachments
+      stop, busy, idle, problem, attachments
     };
   }
 
@@ -265,19 +280,30 @@
     const flight = state.flight;
     active.canConfirm = false;
     if (snapshot.problem) return pause("ChatGPT needs attention. Check the conversation before resuming.");
-    if (snapshot.busy) active.confirmed = null;
+    if (snapshot.busy) {
+      active.confirmed = null;
+      active.completedByControls = null;
+    }
     const canProceed = candidate => candidate.done || Boolean(
-      active.confirmed && candidate.editor && candidate.form && !candidate.busy && !candidate.problem &&
-      active.confirmed === identityOf(candidate));
+      candidate.editor && candidate.form && !candidate.busy && !candidate.problem &&
+      (active.confirmed === identityOf(candidate) ||
+        (candidate.idle && active.completedByControls === identityOf(candidate))));
     const offerConfirmation = () => {
       active.canConfirm = Boolean(snapshot.editor && snapshot.form && !snapshot.busy);
       if (active.canConfirm) status = "ChatGPT’s finish signal is unavailable. If the reply is complete, confirm below.";
     };
     if (flight) {
       if (flight.owner !== instance) return pause("Resolve the previous send before continuing.");
+      if (active.observedFlight !== flight.id) {
+        active.observedFlight = flight.id;
+        active.sawStop = false;
+        active.idleCandidate = null;
+      }
       if (!flight.userId && snapshot.userId && snapshot.userId !== flight.previousUserId) {
         const message = find('[data-testid="collapsible-user-message-content"], [data-user-message-bubble], .whitespace-pre-wrap', snapshot.user) ?? snapshot.user;
-        if (read(message) !== flight.text) return pause("The latest message differs from the queued prompt. Check the chat.");
+        if (read(message) !== flight.text && readDraft(message) !== flight.text) {
+          return pause("The latest message differs from the queued prompt. Check the chat.");
+        }
         flight.userId = snapshot.userId;
         active.lastBusy = Date.now();
         await save(id, state);
@@ -286,6 +312,23 @@
       if (flight.userId && snapshot.userId !== flight.userId) return pause("The conversation changed while waiting for ChatGPT.");
       if (!flight.userId && Date.now() - flight.started > 45000) return pause("Could not confirm the send. Check whether the prompt appeared.");
       status = flight.userId ? "Waiting for ChatGPT to finish…" : "Confirming the send…";
+      if (flight.userId && snapshot.stop) active.sawStop = true;
+      // Some layouts omit the reply toolbar. Require an observed Stop control,
+      // a fresh reply for the verified prompt, and a sustained return to idle.
+      if (flight.userId && active.sawStop && snapshot.assistantId &&
+          snapshot.assistantId !== flight.previousAssistantId && snapshot.replyText.trim() &&
+          snapshot.idle && !snapshot.busy) {
+        const identity = identityOf(snapshot);
+        if (active.idleCandidate?.identity !== identity) active.idleCandidate = {identity, since: performance.now()};
+        if (performance.now() - active.idleCandidate.since >= 8000) active.completedByControls = identity;
+        else if (!snapshot.done) {
+          status = "ChatGPT looks idle. Verifying the reply before sending the next prompt…";
+          active.identity = null;
+          return;
+        }
+      } else {
+        active.idleCandidate = null;
+      }
       if (!flight.userId || !canProceed(snapshot)) {
         active.identity = null;
         if (snapshot.busy) active.lastBusy = Date.now();
@@ -310,9 +353,11 @@
     if (!settled(active, snapshot)) return;
     if (readDraft(snapshot.editor) !== "" || snapshot.attachments) return pause("Clear or send the existing ChatGPT draft before resuming.");
     const item = state.queue[0];
-    state.flight = {id: item.id, text: item.text, owner: instance, previousUserId: snapshot.userId, started: Date.now()};
+    state.flight = {id: item.id, text: item.text, owner: instance, previousUserId: snapshot.userId,
+      previousAssistantId: snapshot.assistantId, started: Date.now()};
     await save(id, state);
-    const ready = candidate => stillActive() && canProceed(candidate) && candidate.userId === snapshot.userId &&
+    const ready = candidate => stillActive() && !candidate.busy && !candidate.problem &&
+      (canProceed(candidate) || active.completedByControls === identityOf(candidate)) && candidate.userId === snapshot.userId &&
       candidate.assistantId === snapshot.assistantId && !candidate.attachments;
     const before = page();
     let issue = "ChatGPT changed before the draft could be prepared.";
@@ -330,6 +375,7 @@
         } else if (after.send && !after.send.disabled && after.send.getAttribute("aria-disabled") !== "true") {
           active.identity = null;
           active.confirmed = null;
+          active.completedByControls = null;
           status = "Confirming the send…";
           after.send.click();
           return;
@@ -435,7 +481,8 @@
       version: api.runtime.getManifest().version,
       composer: Boolean(snapshot.editor), send: Boolean(snapshot.send),
       turns: snapshot.turnCount, userTurn: Boolean(snapshot.userId), replyTurn: Boolean(snapshot.assistantId),
-      replyActions: snapshot.finalActions, busy: Boolean(snapshot.busy), ready: snapshot.done,
+      replyActions: snapshot.finalActions, busy: Boolean(snapshot.busy), idleControl: snapshot.idle,
+      observedStop: Boolean(run?.sawStop), ready: snapshot.done,
       queued: record?.queue.length ?? 0
     }, null, 2);
     report.focus();
