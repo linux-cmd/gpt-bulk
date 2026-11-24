@@ -9,6 +9,11 @@
     node.getClientRects().length && getComputedStyle(node).visibility === "visible");
   const shown = (selector, root = document) => [...root.querySelectorAll(selector)].filter(visible);
   const read = node => node.innerText.replace(/\r\n?/g, "\n");
+  function readInline(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue;
+    if (node.nodeName === "BR") return node.matches(".ProseMirror-trailingBreak") ? "" : "\n";
+    return [...node.childNodes].map(readInline).join("");
+  }
   function readDraft(editor) {
     if (editor.childNodes.length === 1 && editor.firstChild.nodeName === "BR") return "";
     const lines = [];
@@ -17,19 +22,19 @@
     for (const node of editor.childNodes) {
       if (node.nodeName === "P" || node.nodeName === "DIV") {
         if (hasInline) lines.push(inline);
-        lines.push([...node.childNodes].map((child, index, children) =>
-          child.nodeName === "BR" ? (index === children.length - 1 ? "" : "\n") : child.textContent).join(""));
+        const placeholder = node.childNodes.length === 1 && node.firstChild.nodeName === "BR";
+        lines.push(placeholder ? "" : readInline(node));
         inline = "";
         hasInline = false;
       } else {
-        inline += node.nodeName === "BR" ? "\n" : node.textContent;
+        inline += readInline(node);
         hasInline = true;
       }
     }
     if (hasInline) lines.push(inline);
     return lines.join("\n");
   }
-  const sendSelector = 'button[data-testid="send-button"], button[data-test-id="send-button"], button[data-testid="chat-input-send"], button[aria-label="Send"], button[aria-label="Send prompt"], button[aria-label="Send message"]';
+  const sendSelector = 'button[data-testid="send-button"], button[data-test-id="send-button"], button[data-testid="chat-input-send"], button[aria-label="Send"], button[aria-label="Send prompt"], button[aria-label="Send message"], button#composer-submit-button[type="submit"]';
   const stopSelector = '[data-testid="stop-button"], [data-test-id="stop-button"], button[aria-label="Stop generating"], button[aria-label="Stop streaming"], button[aria-label="Stop response"]';
   const composerSelector = 'form[data-chatgpt-composer], form[data-type="unified-composer"]';
   const editorSelector = '#prompt-textarea[contenteditable="true"], [contenteditable="true"][role="textbox"][aria-label="Chat with ChatGPT"], [contenteditable="true"][role="textbox"][aria-label="Message ChatGPT"], [contenteditable="true"][role="textbox"][aria-label="Ask ChatGPT"]';
@@ -55,7 +60,8 @@
     const candidates = shown(editorSelector + ', :is(' + composerSelector + ') [contenteditable="true"]:is(.ProseMirror, [role="textbox"])');
     const editor = candidates.length === 1 ? candidates[0] : null;
     const form = editor?.closest(composerSelector) || editor?.closest("form");
-    const sendButtons = form ? shown(sendSelector, form) : [];
+    const sendButtons = form ? shown(sendSelector, form).filter(button =>
+      !button.matches(stopSelector) && !/stop|voice|dictat/i.test(button.getAttribute("aria-label") ?? "")) : [];
     const send = sendButtons.length === 1 ? sendButtons[0] : null;
     const messages = turns();
     const user = messages.findLast(message => message.role === "user");
@@ -234,14 +240,15 @@
     }
     const clipboardData = new DataTransfer();
     clipboardData.setData("text/plain", text);
-    const clipboard = document.createElement("div");
-    for (const line of text.split("\n")) {
-      const paragraph = document.createElement("p");
-      if (line) paragraph.textContent = line;
-      else paragraph.append(document.createElement("br"));
-      clipboard.append(paragraph);
+    const paragraph = document.createElement("p");
+    paragraph.style.whiteSpace = "pre-wrap";
+    // Encode line breaks inside one paragraph. Separate paragraphs can be
+    // serialized with extra blank lines by the ChatGPT composer.
+    for (const [index, line] of text.split("\n").entries()) {
+      if (index) paragraph.append(document.createElement("br"));
+      if (line) paragraph.append(document.createTextNode(line));
     }
-    clipboardData.setData("text/html", clipboard.innerHTML);
+    clipboardData.setData("text/html", paragraph.outerHTML);
     const unhandled = editor.dispatchEvent(new ClipboardEvent("paste", {
       clipboardData, bubbles: true, cancelable: true, composed: true
     }));

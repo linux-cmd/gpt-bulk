@@ -3,6 +3,7 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
 
 function mock() {
   window.sent = [];
@@ -41,12 +42,15 @@ function mock() {
     editor.setAttribute("aria-label", "Chat with ChatGPT");
     editor.closest("form").setAttribute("data-chatgpt-composer", "");
     send.removeAttribute("data-testid");
-    send.setAttribute("aria-label", "Send");
+    send.id = "composer-submit-button";
+    send.type = "submit";
+    send.closest("form").onsubmit = event => event.preventDefault();
     stop.removeAttribute("data-testid");
     stop.setAttribute("aria-label", "Stop");
   }
   editor.oninput = () => { send.disabled = !editor.innerText; };
-  editor.onpaste = event => {
+  const prose = window.mountProseMirror?.(editor, () => { send.disabled = false; });
+  if (!prose) editor.onpaste = event => {
     event.preventDefault();
     if (document.activeElement !== editor) window.pastesWithoutFocus++;
     editor.innerHTML = event.clipboardData.getData("text/html");
@@ -54,7 +58,10 @@ function mock() {
     else send.disabled = false;
   };
   send.onclick = () => {
-    const text = [...editor.children].map(paragraph => paragraph.textContent).join("\n");
+    // Model an editor that exports separate paragraphs with blank lines but
+    // preserves a hard break inside a paragraph as one newline.
+    const text = prose?.text() ?? [...editor.children].map(paragraph => [...paragraph.childNodes]
+      .map(node => node.nodeName === "BR" ? "\n" : node.textContent).join("")).join("\n\n");
     window.sent.push(text);
     if (window.ignoreSend) return;
     const user = document.createElement("div");
@@ -62,7 +69,8 @@ function mock() {
     user.style.whiteSpace = "pre-wrap";
     user.textContent = text;
     messages.append(user);
-    editor.replaceChildren();
+    if (prose) prose.clear();
+    else editor.replaceChildren();
     send.disabled = true;
     stop.hidden = false;
   };
@@ -92,6 +100,7 @@ const html = [
   '<form><div id="prompt-textarea" contenteditable="true" style="white-space:pre-wrap"></div>',
   '<button type="button" data-testid="send-button" disabled>Send</button>',
   '<button type="button" data-testid="stop-button" hidden>Stop</button></form>',
+  process.env.GPT_BULK_PROSEMIRROR ? '<script>' + readFileSync(process.env.GPT_BULK_PROSEMIRROR, "utf8") + '</script>' : '',
   '<script>(' + mock.toString() + ')();</script>'
 ].join("");
 
@@ -134,7 +143,7 @@ async function main() {
         }, 25);
       }));
     };
-    const first = "Line one 🧪\n\nLine three: café";
+    const first = "Finish Unit 4 🧪, then run the\nself-check.\n\nKeep  two spaces: café";
     await add(first);
     await add("Second prompt");
     if (process.env.GPT_BULK_SCREENSHOT) {
@@ -190,6 +199,10 @@ async function main() {
     await tab.getByText("Queue complete.", {exact: true}).waitFor();
     assert.deepEqual(await tab.evaluate(() => window.sent), [first, "Second prompt"]);
     assert.deepEqual(await other.evaluate(() => window.sent), []);
+    if (process.env.GPT_BULK_PROSEMIRROR) {
+      console.log("Passed exact multiline sending through ProseMirror’s clipboard parser and document state.");
+      return;
+    }
     await add("Third prompt");
     await tab.locator(editorSelector).fill("My existing draft");
     await tab.locator("button#start").click();

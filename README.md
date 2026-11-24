@@ -4,7 +4,7 @@ Queue text prompts in a ChatGPT conversation and let them run in order while you
 
 [Product website and download](https://gptbulk-extension.vercel.app) · [Privacy policy](https://gptbulk-extension.vercel.app/privacy)
 
-Version 1.0.4 places GPT Bulk above the ChatGPT composer. If you already installed GPT Bulk, update the files in the same folder, select **Reload** in your browser’s extension manager, then refresh ChatGPT. The **Diagnostics** button shows a report containing no conversation text, prompts, or conversation IDs.
+Version 1.0.5 preserves line breaks when inserting a multiline prompt. If you already installed GPT Bulk, update the files in the same folder, select **Reload** in your browser’s extension manager, then refresh ChatGPT. Clear any leftover draft from a previous attempt before restarting the queue. The **Diagnostics** button shows a report containing no conversation text, prompts, or conversation IDs.
 
 ## Install
 
