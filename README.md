@@ -4,7 +4,7 @@ Queue text prompts in a ChatGPT conversation and let them run in order while you
 
 [Product website and download](https://gptbulk-extension.vercel.app) · [Privacy policy](https://gptbulk-extension.vercel.app/privacy)
 
-Version 1.0.6 adds another way to recognize completed replies when the reply toolbar is unavailable. It requires a verified send, a new reply, and a return from Stop to the idle composer that stays stable for eight seconds. If you already installed GPT Bulk, update the files in the same folder, select **Reload** in your browser’s extension manager, then refresh ChatGPT. Clear any leftover draft from a previous attempt before restarting the queue. The **Diagnostics** button shows a report containing no conversation text, prompts, or conversation IDs.
+Version 1.0.7 stops the old queue runner when the browser reloads the extension. Update the files in the same folder, select **Reload** in your browser’s extension manager, and then refresh ChatGPT. If the old panel shows **Refresh ChatGPT**, use it to reconnect. The saved queue remains available, including any prompt that needs review after an interrupted send. Clear any leftover draft from a previous attempt before restarting the queue.
 
 ## Install
 

@@ -1,5 +1,6 @@
 (() => {
   const api = globalThis.browser ?? chrome;
+  const lifecycle = new AbortController();
   const keyForPage = () => {
     const id = location.pathname.match(/\/c\/([\w-]+)\/?$/)?.[1];
     return id ? "gpt-bulk:" + id : null;
@@ -139,7 +140,39 @@
   const input = find("textarea", panel);
   const list = find("ol", panel);
   const instance = crypto.randomUUID();
-  let key, record, status, run, timer, renderedQueue, serial = Promise.resolve();
+  let key, record, status, run, timer, observer, renderedQueue, serial = Promise.resolve();
+
+  function contextReady(error) {
+    if (lifecycle.signal.aborted) return false;
+    try {
+      if (api.runtime?.id && !/extension context invalidated/i.test(String(error ?? ""))) return true;
+    } catch {
+      // Accessing the old runtime can throw after an extension reload.
+    }
+    lifecycle.abort();
+    observer?.disconnect();
+    clearTimeout(timer);
+    const active = run;
+    run = null;
+    active?.release?.();
+    const section = panel.querySelector("section");
+    const notice = document.createElement("p");
+    notice.textContent = "GPT Bulk was reloaded. Refresh this ChatGPT tab to reconnect.";
+    notice.setAttribute("role", "status");
+    const refresh = document.createElement("button");
+    refresh.textContent = "Refresh ChatGPT";
+    refresh.onclick = () => location.reload();
+    section.replaceChildren(notice, refresh);
+    panel.querySelector("details").open = true;
+    return false;
+  }
+
+  panel.addEventListener("click", event => {
+    if (!contextReady()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, {capture: true, signal: lifecycle.signal});
 
   function mount() {
     const editor = shown(editorSelector + ', :is(' + composerSelector + ') [contenteditable="true"]:is(.ProseMirror, [role="textbox"])');
@@ -154,6 +187,7 @@
   const lock = (id, fn) => navigator.locks.request(id, fn);
 
   function render() {
+    if (!contextReady()) return;
     ui("status").textContent = status;
     ui("count").textContent = record?.queue.length ? record.queue.length + " queued" : "";
     ui("add").disabled = !record;
@@ -188,13 +222,18 @@
   }
 
   function serially(task) {
-    serial = serial.then(task).catch(error => {
+    serial = serial.then(() => {
+      if (contextReady()) return task();
+    }).catch(error => {
+      if (!contextReady(error)) return;
       console.warn("GPT Bulk", error);
       pause("Queue paused. Browser storage or page access failed.");
     });
+    return serial;
   }
 
   function schedule(delay = 0) {
+    if (!contextReady()) return;
     if (timer !== undefined) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = undefined;
@@ -396,7 +435,7 @@
     const active = run;
     if (!active?.release) return;
     const id = key;
-    const stillActive = () => run === active && keyForPage() === id;
+    const stillActive = () => contextReady() && run === active && keyForPage() === id;
     await lock(id, () => advance(active, id, stillActive));
     render();
     if (run) schedule(350);
@@ -451,22 +490,16 @@
     if (!item || run) return;
     navigator.locks.request(id + ":runner", {ifAvailable: true}, held => {
       if (!held) return pause("The queue is active in another tab.");
-      return new Promise(resolve => {
-        serially(async () => {
-          try {
-            await lock(id, async () => {
-              if (keyForPage() !== id) return;
-              const state = await load(id);
-              if (state.flight?.id !== item) return;
-              if (sent) state.queue = state.queue.filter(entry => entry.id !== item);
-              state.flight = null;
-              await save(id, state);
-              record = state;
-              pause("Queue paused. Review the conversation before restarting.");
-            });
-          } finally {
-            resolve();
-          }
+      return serially(async () => {
+        await lock(id, async () => {
+          if (!contextReady() || keyForPage() !== id) return;
+          const state = await load(id);
+          if (state.flight?.id !== item) return;
+          if (sent) state.queue = state.queue.filter(entry => entry.id !== item);
+          state.flight = null;
+          await save(id, state);
+          record = state;
+          if (contextReady()) pause("Queue paused. Review the conversation before restarting.");
         });
       });
     }).catch(() => pause("Could not resolve the previous send."));
@@ -496,24 +529,26 @@
       render();
     });
   });
-  new MutationObserver(() => {
+  observer = new MutationObserver(() => {
     if (timer === undefined && (run || key !== keyForPage() || !host.isConnected || !host.nextElementSibling?.matches("form"))) {
       schedule(100);
     }
-  }).observe(document.body, {
+  });
+  observer.observe(document.body, {
     subtree: true, childList: true, attributes: true,
     attributeFilter: ["aria-label", "aria-busy", "disabled", "data-is-streaming", "data-streaming"]
   });
-  window.addEventListener("popstate", () => schedule());
-  window.addEventListener("pageshow", () => schedule());
-  window.addEventListener("pagehide", () => pause("Queue paused."));
-  document.addEventListener("visibilitychange", () => schedule());
+  const options = {signal: lifecycle.signal};
+  window.addEventListener("popstate", () => schedule(), options);
+  window.addEventListener("pageshow", () => schedule(), options);
+  window.addEventListener("pagehide", () => { if (contextReady()) pause("Queue paused."); }, options);
+  document.addEventListener("visibilitychange", () => schedule(), options);
   document.addEventListener("click", event => {
     if (run && event.target instanceof Element &&
         event.target.closest(stopSelector + ', :is(' + composerSelector + ') button[aria-label="Stop"]')) {
       pause("ChatGPT was stopped. Review the reply before resuming.");
     }
-  }, true);
+  }, {...options, capture: true});
   if (navigator.locks) schedule();
   else pause("This browser does not support the locking needed for safe sends.");
 })();

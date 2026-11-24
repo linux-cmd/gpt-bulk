@@ -1,5 +1,5 @@
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
-const { mkdtemp, rm } = require("node:fs/promises");
+const { cp, mkdtemp, rm, writeFile } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 const assert = require("node:assert/strict");
@@ -120,9 +120,25 @@ const html = [
 
 async function main() {
   const profile = await mkdtemp(join(tmpdir(), "gpt-bulk-qa-"));
-  const directory = resolve(__dirname, "..");
+  let directory = resolve(__dirname, "..");
+  const invalidation = Boolean(process.env.GPT_BULK_INVALIDATION);
   let context;
   try {
+    if (invalidation) {
+      const testDirectory = join(profile, "test-extension");
+      for (const file of ["manifest.json", "content.js", "icons"]) {
+        await cp(join(directory, file), join(testDirectory, file), {recursive: true});
+      }
+      const entry = join(testDirectory, "content.js");
+      const source = readFileSync(entry, "utf8");
+      await writeFile(entry, source.replace("const api = globalThis.browser ?? chrome;", [
+        "const api = {storage: chrome.storage, get runtime() {",
+        "  if (document.documentElement.dataset.invalidateExtension) throw new Error('Extension context invalidated.');",
+        "  return chrome.runtime;",
+        "}};"
+      ].join("\n")));
+      directory = testDirectory;
+    }
     context = await chromium.launchPersistentContext(profile, {
       channel: process.env.BROWSER_EXE ? undefined : "chromium",
       executablePath: process.env.BROWSER_EXE || undefined,
@@ -199,6 +215,17 @@ async function main() {
       throw error;
     }
     assert.deepEqual(await tab.evaluate(() => window.sent), [first]);
+    if (invalidation) {
+      await tab.evaluate(() => { document.documentElement.dataset.invalidateExtension = "yes"; });
+      await tab.getByRole("button", {name: "Refresh ChatGPT"}).waitFor();
+      assert.deepEqual(await tab.evaluate(() => window.sent), [first]);
+      await tab.getByRole("button", {name: "Refresh ChatGPT"}).click();
+      await tab.getByText("GPT Bulk", {exact: true}).click();
+      await tab.getByText(/resolving the interrupted send/).waitFor();
+      assert.equal(await tab.locator("#start").isDisabled(), true);
+      console.log("Passed extension context invalidation, refresh, and preserved queue.");
+      return;
+    }
     if (rollout) assert.equal(await tab.evaluate(() => window.pastesWithoutFocus), 1);
     await other.getByText("GPT Bulk", {exact: true}).click();
     await other.locator("button#start").evaluate(button => button.click());
