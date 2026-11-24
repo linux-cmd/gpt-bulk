@@ -29,17 +29,21 @@
     if (hasInline) lines.push(inline);
     return lines.join("\n");
   }
-  const sendSelector = 'button[data-testid="send-button"], button[data-testid="chat-input-send"], button[aria-label="Send"], button[aria-label="Send prompt"], button[aria-label="Send message"]';
-  const stopSelector = '[data-testid="stop-button"], button[aria-label="Stop generating"], button[aria-label="Stop streaming"], button[aria-label="Stop response"]';
+  const sendSelector = 'button[data-testid="send-button"], button[data-test-id="send-button"], button[data-testid="chat-input-send"], button[aria-label="Send"], button[aria-label="Send prompt"], button[aria-label="Send message"]';
+  const stopSelector = '[data-testid="stop-button"], [data-test-id="stop-button"], button[aria-label="Stop generating"], button[aria-label="Stop streaming"], button[aria-label="Stop response"]';
   const composerSelector = 'form[data-chatgpt-composer], form[data-type="unified-composer"]';
   const editorSelector = '#prompt-textarea[contenteditable="true"], [contenteditable="true"][role="textbox"][aria-label="Chat with ChatGPT"], [contenteditable="true"][role="textbox"][aria-label="Message ChatGPT"], [contenteditable="true"][role="textbox"][aria-label="Ask ChatGPT"]';
-  const turnSelector = '[data-testid^="conversation-turn-"], article, [data-turn-key], [data-turn-id]';
+  const turnSelector = '[data-testid^="conversation-turn-"], [data-test-id^="conversation-turn-"], article, [data-turn-key], [data-turn-id], [data-turn]';
+  const messageSelector = '[data-message-author-role][data-message-id], [data-chatgpt-search-unit-key][data-chatgpt-search-message-ids], [data-turn][data-turn-id]';
+  const replyActions = 'button[data-testid="copy-turn-action-button"], button[data-test-id="copy-turn-action-button"], button[data-testid="good-response-turn-action-button"], button[data-test-id="good-response-turn-action-button"], button[data-testid="bad-response-turn-action-button"], button[data-test-id="bad-response-turn-action-button"], button[aria-label="Copy response"], button[aria-label="Copy"], button[aria-label="Good response"], button[aria-label="Bad response"], button[aria-label="Read aloud"]';
 
   function turns() {
     const messages = new Map();
-    for (const node of shown('[data-message-author-role][data-message-id], [data-chatgpt-search-unit-key][data-chatgpt-search-message-ids]')) {
-      const role = node.dataset.messageAuthorRole || node.dataset.chatgptSearchUnitKey?.split(":").at(-1);
-      const id = node.dataset.messageId || node.dataset.chatgptSearchMessageIds?.match(/^(?:\["|")?([\w:-]+)(?:"\]|")?$/)?.[1];
+    for (const node of shown(messageSelector)) {
+      const wrapper = node.matches('[data-turn][data-turn-id]') && !node.matches('[data-message-id], [data-chatgpt-search-message-ids]');
+      if (wrapper && shown('[data-message-author-role][data-message-id], [data-chatgpt-search-unit-key][data-chatgpt-search-message-ids]', node).length) continue;
+      const role = node.dataset.messageAuthorRole || node.dataset.chatgptSearchUnitKey?.split(":").at(-1) || node.dataset.turn;
+      const id = node.dataset.messageId || node.dataset.chatgptSearchMessageIds?.trim().match(/^(?:\["|")?([\w:-]+)(?:"\]|")?$/)?.[1] || node.dataset.turnId;
       if ((role === "user" || role === "assistant") && id && !messages.has(id)) {
         messages.set(id, {id, role, node});
       }
@@ -57,9 +61,11 @@
     const user = messages.findLast(message => message.role === "user");
     const assistant = messages.at(-1);
     const turn = assistant?.role === "assistant" && assistant.node.closest(turnSelector);
-    const finalActions = Boolean(turn && shown('button[data-testid="copy-turn-action-button"], button[aria-label="Copy response"], button[aria-label="Copy"]', turn).some(button =>
+    const finalActions = Boolean(turn && !messages.some(message => message !== assistant && turn.contains(message.node)) &&
+      [...turn.querySelectorAll(replyActions)].some(button =>
       !button.closest('.markdown, [data-markdown-text-style], [data-markdown-copy], pre, code, [data-user-message-bubble]') &&
-      (button.getAttribute("aria-label") !== "Copy" || !assistant.node.contains(button)) &&
+      (button.getAttribute("aria-label") !== "Copy" || turn === assistant.node || !assistant.node.contains(button)) &&
+      button.getClientRects().length && !button.closest('[hidden], [inert]') &&
       !button.disabled && button.getAttribute("aria-disabled") !== "true"));
     const busy = shown(stopSelector + ', main [data-is-streaming="true"], main [data-streaming="true"]').length ||
       form?.getAttribute("aria-busy") === "true" || (turn && turn.getAttribute("aria-busy") === "true") ||
@@ -73,7 +79,9 @@
       editor, send, user: user?.node, userId: user?.id, assistantId: turn && assistant.id,
       replyText: finalActions ? assistant.node.textContent : "",
       done: Boolean(editor && form && user && finalActions && !busy && !problem),
-      waitingFor: !editor || !form ? "the ChatGPT message composer" : "the latest reply’s completion controls",
+      finalActions, turnCount: messages.length,
+      waitingFor: !editor || !form ? "the ChatGPT message composer" :
+        !user || !turn ? "the latest ChatGPT reply" : "the latest reply’s completion controls",
       busy, problem, attachments
     };
   }
@@ -83,18 +91,20 @@
   panel.innerHTML = `
     <style>
       :host{all:initial;position:fixed;right:16px;bottom:40px;z-index:2147483647;color-scheme:light dark;font:14px system-ui}
-      details{width:min(350px,calc(100vw - 32px));background:Canvas;color:CanvasText;border:1px solid GrayText;border-radius:14px;box-shadow:0 8px 30px #0003}
-      details:not([open]){width:max-content} summary{cursor:pointer;padding:12px 16px;font-weight:700}
+      .queue-panel{width:min(350px,calc(100vw - 32px));background:Canvas;color:CanvasText;border:1px solid GrayText;border-radius:14px;box-shadow:0 8px 30px #0003}
+      .queue-panel:not([open]){width:max-content} summary{cursor:pointer;padding:12px 16px;font-weight:700}
       section{padding:0 12px 12px} textarea{box-sizing:border-box;width:100%;min-height:90px;resize:vertical;border-radius:8px;padding:8px}
       button{font:inherit;cursor:pointer;border-radius:7px;padding:5px 9px;margin:3px 3px 3px 0}
       ol{padding-left:22px;max-height:190px;overflow:auto} li{white-space:pre-wrap;overflow-wrap:anywhere} p{margin:8px 0}
     </style>
-    <details><summary>GPT Bulk</summary><section>
+    <details class="queue-panel"><summary>GPT Bulk</summary><section>
       <p id="status" role="status"></p>
       <textarea aria-label="Prompt to queue" placeholder="Write or paste a prompt"></textarea>
       <div><button id="add">Add prompt</button><button id="start">Start</button><button id="pause">Pause</button></div>
       <div id="resolve" hidden><button id="sent">Remove sent prompt</button><button id="retry">Keep for retry</button></div>
       <ol></ol>
+      <details><summary>Troubleshooting</summary><button id="diagnostics">Show diagnostics</button>
+      <textarea id="report" aria-label="GPT Bulk diagnostics" readonly hidden></textarea></details>
     </section></details>`;
   document.body.append(host);
   const ui = id => panel.getElementById(id);
@@ -369,6 +379,19 @@
   }
   ui("sent").onclick = () => resolveSend(true);
   ui("retry").onclick = () => resolveSend(false);
+  ui("diagnostics").onclick = () => {
+    const snapshot = page();
+    const report = ui("report");
+    report.hidden = false;
+    report.value = JSON.stringify({
+      version: api.runtime.getManifest().version,
+      composer: Boolean(snapshot.editor), send: Boolean(snapshot.send),
+      turns: snapshot.turnCount, userTurn: Boolean(snapshot.userId), replyTurn: Boolean(snapshot.assistantId),
+      replyActions: snapshot.finalActions, busy: Boolean(snapshot.busy), ready: snapshot.done,
+      queued: record?.queue.length ?? 0
+    }, null, 2);
+    report.select();
+  };
   api.storage.onChanged.addListener((changes, area) => {
     if (area !== "local" || !changes[key]) return;
     serially(async () => {

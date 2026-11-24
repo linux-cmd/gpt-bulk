@@ -7,13 +7,18 @@ const assert = require("node:assert/strict");
 function mock() {
   window.sent = [];
   const rollout = location.pathname.endsWith("-rollout");
+  const toolbar = location.pathname.endsWith("-toolbar");
   window.pastesWithoutFocus = 0;
   const editor = document.querySelector("#prompt-textarea");
   const send = document.querySelector("[data-testid=send-button]");
   const stop = document.querySelector("[data-testid=stop-button]");
   const messages = document.querySelector("main");
   function setRole(node, role, id) {
-    if (rollout) {
+    if (toolbar) {
+      const turn = role === "assistant" && node.parentElement?.matches("article") ? node.parentElement : node;
+      turn.dataset.turn = role;
+      turn.dataset.turnId = id;
+    } else if (rollout) {
       node.dataset.chatgptSearchUnitKey = "unit:" + role;
       node.dataset.chatgptSearchMessageIds = id;
     } else {
@@ -21,13 +26,14 @@ function mock() {
       node.dataset.messageId = id;
     }
   }
-  if (rollout) {
+  if (rollout || toolbar) {
     for (const node of messages.querySelectorAll("[data-message-author-role]")) {
       setRole(node, node.dataset.messageAuthorRole, node.dataset.messageId);
       delete node.dataset.messageAuthorRole;
       delete node.dataset.messageId;
     }
-    messages.querySelector("button").setAttribute("aria-label", "Copy");
+    messages.querySelector("button").setAttribute("aria-label", rollout ? "Copy" : "Good response");
+    if (toolbar) messages.querySelector("button").style.visibility = "hidden";
     editor.removeAttribute("id");
     editor.setAttribute("role", "textbox");
     editor.setAttribute("aria-label", "Chat with ChatGPT");
@@ -62,15 +68,16 @@ function mock() {
     stop.hidden = true;
     const article = document.createElement("article");
     const answer = document.createElement("div");
-    setRole(answer, "assistant", "a" + window.sent.length);
     answer.textContent = "Checking sources…";
     article.append(answer);
+    setRole(answer, "assistant", "a" + window.sent.length);
     if (rollout) answer.insertAdjacentHTML("beforeend", '<pre><button aria-label="Copy">Copy code</button></pre>');
     messages.append(article);
   };
   window.finish = () => {
     const button = document.createElement("button");
-    button.setAttribute("aria-label", rollout ? "Copy" : "Copy response");
+    button.setAttribute("aria-label", toolbar ? "Good response" : rollout ? "Copy" : "Copy response");
+    if (toolbar) button.style.visibility = "hidden";
     button.textContent = "Copy";
     messages.lastElementChild.append(button);
   };
@@ -102,10 +109,19 @@ async function main() {
     const tab = context.pages()[0];
     tab.setDefaultTimeout(10000);
     const rollout = Boolean(process.env.GPT_BULK_ROLLOUT);
-    const target = "https://chatgpt.com/c/test-conversation" + (rollout ? "-rollout" : "");
-    const editorSelector = rollout ? '[aria-label="Chat with ChatGPT"]' : "#prompt-textarea";
+    const toolbar = Boolean(process.env.GPT_BULK_TOOLBAR);
+    const target = "https://chatgpt.com/c/test-conversation" + (toolbar ? "-toolbar" : rollout ? "-rollout" : "");
+    const editorSelector = rollout || toolbar ? '[aria-label="Chat with ChatGPT"]' : "#prompt-textarea";
     await tab.goto(target);
     await tab.getByText("GPT Bulk", {exact: true}).click();
+    if (toolbar) {
+      await tab.getByText("Troubleshooting", {exact: true}).click();
+      await tab.getByRole("button", {name: "Show diagnostics"}).click();
+      const report = JSON.parse(await tab.getByRole("textbox", {name: "GPT Bulk diagnostics"}).inputValue());
+      assert.equal(report.replyActions, true);
+      assert.equal(report.ready, true);
+      await tab.getByText("Troubleshooting", {exact: true}).click();
+    }
     const add = async text => {
       const box = tab.getByRole("textbox", {name: "Prompt to queue"});
       await box.fill(text);
