@@ -48,7 +48,7 @@
   }
 
   function page() {
-    const candidates = shown(editorSelector + ', :is(' + composerSelector + ') [contenteditable="true"].ProseMirror');
+    const candidates = shown(editorSelector + ', :is(' + composerSelector + ') [contenteditable="true"]:is(.ProseMirror, [role="textbox"])');
     const editor = candidates.length === 1 ? candidates[0] : null;
     const form = editor?.closest(composerSelector) || editor?.closest("form");
     const sendButtons = form ? shown(sendSelector, form) : [];
@@ -189,6 +189,36 @@
     return performance.now() - active.since >= 1500;
   }
 
+  function putDraft(editor, text) {
+    editor.focus({preventScroll: true});
+    // Direct the editing event at ChatGPT's editor even if the browser kept
+    // keyboard focus on the queue panel or in another tab.
+    if (document.activeElement === editor) {
+      const caret = document.createRange();
+      caret.selectNodeContents(editor);
+      caret.collapse(false);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(caret);
+    }
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", text);
+    const clipboard = document.createElement("div");
+    for (const line of text.split("\n")) {
+      const paragraph = document.createElement("p");
+      if (line) paragraph.textContent = line;
+      else paragraph.append(document.createElement("br"));
+      clipboard.append(paragraph);
+    }
+    clipboardData.setData("text/html", clipboard.innerHTML);
+    const unhandled = editor.dispatchEvent(new ClipboardEvent("paste", {
+      clipboardData, bubbles: true, cancelable: true, composed: true
+    }));
+    if (unhandled && readDraft(editor) === "" && document.activeElement === editor) {
+      document.execCommand("insertText", false, text);
+    }
+  }
+
   async function advance(active, id, stillActive) {
     const state = await load(id);
     if (!stillActive()) return;
@@ -239,38 +269,32 @@
     const ready = candidate => stillActive() && candidate.done && candidate.userId === snapshot.userId &&
       candidate.assistantId === snapshot.assistantId && !candidate.attachments;
     const before = page();
+    let issue = "ChatGPT changed before the draft could be prepared.";
     if (ready(before) && readDraft(before.editor) === "") {
-      before.editor.focus({preventScroll: true});
-      if (document.activeElement === before.editor) {
-        const clipboardData = new DataTransfer();
-        clipboardData.setData("text/plain", item.text);
-        const clipboard = document.createElement("div");
-        for (const line of item.text.split("\n")) {
-          const paragraph = document.createElement("p");
-          if (line) paragraph.textContent = line;
-          else paragraph.append(document.createElement("br"));
-          clipboard.append(paragraph);
-        }
-        clipboardData.setData("text/html", clipboard.innerHTML);
-        before.editor.dispatchEvent(new ClipboardEvent("paste", {clipboardData, bubbles: true, cancelable: true}));
-        if (readDraft(before.editor) === "") document.execCommand("insertText", false, item.text);
-      }
+      status = "Preparing the next prompt…";
+      render();
+      putDraft(before.editor, item.text);
       const deadline = performance.now() + 3000;
       do {
         const after = page();
-        if (!ready(after) || after.editor !== before.editor || readDraft(after.editor) !== item.text) break;
-        if (after.send && !after.send.disabled && after.send.getAttribute("aria-disabled") !== "true") {
+        if (!ready(after) || after.editor !== before.editor) break;
+        const draft = readDraft(after.editor);
+        if (draft !== item.text) {
+          issue = draft === "" ? "ChatGPT did not accept the draft." : "The ChatGPT draft differs from the queued prompt.";
+        } else if (after.send && !after.send.disabled && after.send.getAttribute("aria-disabled") !== "true") {
           active.identity = null;
           status = "Confirming the send…";
           after.send.click();
           return;
+        } else {
+          issue = "The draft is ready, but ChatGPT’s Send button did not become available.";
         }
         await new Promise(resolve => setTimeout(resolve, 100));
       } while (performance.now() < deadline);
     }
     state.flight = null;
     await save(id, state);
-    if (stillActive()) pause("Could not verify the full draft and Send button. Review the ChatGPT composer.");
+    if (stillActive()) pause(issue + " Review the ChatGPT composer before restarting.");
   }
 
   async function tick() {
@@ -284,6 +308,9 @@
     if (run) schedule(350);
   }
 
+  ui("start").addEventListener("mousedown", event => {
+    if (event.button === 0) event.preventDefault();
+  });
   ui("start").onclick = () => {
     if (run || !record?.queue.length || key !== keyForPage()) return;
     const active = {lastBusy: Date.now()};

@@ -4,7 +4,7 @@ Queue text prompts in a ChatGPT conversation and let them run in order while you
 
 [Product website and download](https://gptbulk-extension.vercel.app) · [Privacy policy](https://gptbulk-extension.vercel.app/privacy)
 
-Version 1.0.1 supports the newer ChatGPT composer and reply controls and waits for the Send button to become ready. If you already installed GPT Bulk, update the files in the same folder, select **Reload** in your browser’s extension manager, then refresh ChatGPT.
+Version 1.0.2 prepares prompts directly in the ChatGPT composer, even when the queue panel or another tab has focus. If you already installed GPT Bulk, update the files in the same folder, select **Reload** in your browser’s extension manager, then refresh ChatGPT. If a send pauses, the panel identifies the step that needs attention.
 
 ## Install
 

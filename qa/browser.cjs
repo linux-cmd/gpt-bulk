@@ -7,6 +7,7 @@ const assert = require("node:assert/strict");
 function mock() {
   window.sent = [];
   const rollout = location.pathname.endsWith("-rollout");
+  window.pastesWithoutFocus = 0;
   const editor = document.querySelector("#prompt-textarea");
   const send = document.querySelector("[data-testid=send-button]");
   const stop = document.querySelector("[data-testid=stop-button]");
@@ -39,6 +40,7 @@ function mock() {
   editor.oninput = () => { send.disabled = !editor.innerText; };
   editor.onpaste = event => {
     event.preventDefault();
+    if (document.activeElement !== editor) window.pastesWithoutFocus++;
     editor.innerHTML = event.clipboardData.getData("text/html");
     if (rollout) setTimeout(() => { send.disabled = false; }, 400);
     else send.disabled = false;
@@ -133,6 +135,12 @@ async function main() {
     other.setDefaultTimeout(10000);
     await other.goto(target);
     await other.bringToFront();
+    if (rollout) {
+      await tab.evaluate(selector => {
+        const editor = document.querySelector(selector);
+        editor.addEventListener("focus", () => editor.blur(), {once: true});
+      }, editorSelector);
+    }
     await tab.locator("button#start").evaluate(button => button.click());
     try {
       await tab.waitForFunction(() => window.sent.length === 1, null, {polling: 100});
@@ -141,6 +149,7 @@ async function main() {
       throw error;
     }
     assert.deepEqual(await tab.evaluate(() => window.sent), [first]);
+    if (rollout) assert.equal(await tab.evaluate(() => window.pastesWithoutFocus), 1);
     await other.getByText("GPT Bulk", {exact: true}).click();
     await other.locator("button#start").evaluate(button => button.click());
     assert.deepEqual(await other.evaluate(() => window.sent), []);
