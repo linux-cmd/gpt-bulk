@@ -37,6 +37,7 @@
   }
   const sendSelector = 'button[data-testid="send-button"], button[data-test-id="send-button"], button[data-testid="chat-input-send"], button[aria-label="Send"], button[aria-label="Send prompt"], button[aria-label="Send message"], button#composer-submit-button[type="submit"]';
   const stopSelector = '[data-testid="stop-button"], [data-test-id="stop-button"], button[aria-label="Stop generating"], button[aria-label="Stop streaming"], button[aria-label="Stop response"]';
+  const hasStop = form => Boolean(shown(stopSelector).length || (form && shown('button[aria-label="Stop"]', form).length));
   const idleSelector = 'button[data-testid="composer-speech-button"], button[data-testid="voice-mode-button"], button[aria-label="Start voice mode"], button[aria-label="Use voice mode"]';
   const composerSelector = 'form[data-chatgpt-composer], form[data-type="unified-composer"]';
   const editorSelector = '#prompt-textarea[contenteditable="true"], [contenteditable="true"][role="textbox"][aria-label="Chat with ChatGPT"], [contenteditable="true"][role="textbox"][aria-label="Message ChatGPT"], [contenteditable="true"][role="textbox"][aria-label="Ask ChatGPT"]';
@@ -85,7 +86,7 @@
       (button.getAttribute("aria-label") !== "Copy" || turn === assistant.node || !assistant.node.contains(button)) &&
       button.getClientRects().length && !button.closest('[hidden], [inert]') &&
       !button.disabled && button.getAttribute("aria-disabled") !== "true"));
-    const stop = Boolean(shown(stopSelector).length || (form && shown('button[aria-label="Stop"]', form).length));
+    const stop = hasStop(form);
     const busy = stop || shown('main [data-is-streaming="true"], main [data-streaming="true"]').length ||
       form?.getAttribute("aria-busy") === "true" || (turn && turn.getAttribute("aria-busy") === "true") ||
       (turn && shown('[data-is-streaming="true"], [data-streaming="true"], [aria-label="Thinking"], [aria-label="Working"]', turn).length);
@@ -338,6 +339,7 @@
         active.sawStop = false;
         active.idleCandidate = null;
       }
+      if (snapshot.stop) active.sawStop = true;
       if (!flight.userId && snapshot.userId && snapshot.userId !== flight.previousUserId) {
         const message = find('[data-testid="collapsible-user-message-content"], [data-user-message-bubble], .whitespace-pre-wrap', snapshot.user) ?? snapshot.user;
         if (read(message) !== flight.text && readDraft(message) !== flight.text) {
@@ -351,7 +353,6 @@
       if (flight.userId && snapshot.userId !== flight.userId) return pause("The conversation changed while waiting for ChatGPT.");
       if (!flight.userId && Date.now() - flight.started > 45000) return pause("Could not confirm the send. Check whether the prompt appeared.");
       status = flight.userId ? "Waiting for ChatGPT to finish…" : "Confirming the send…";
-      if (flight.userId && snapshot.stop) active.sawStop = true;
       // Some layouts omit the reply toolbar. Require an observed Stop control,
       // a fresh reply for the verified prompt, and a sustained return to idle.
       if (flight.userId && active.sawStop && snapshot.assistantId &&
@@ -415,8 +416,13 @@
           active.identity = null;
           active.confirmed = null;
           active.completedByControls = null;
+          active.observedFlight = item.id;
+          active.sawStop = false;
+          active.idleCandidate = null;
+          active.watchedForm = after.form;
           status = "Confirming the send…";
           after.send.click();
+          if (hasStop(after.form)) active.sawStop = true;
           return;
         } else {
           issue = "The draft is ready, but ChatGPT’s Send button did not become available.";
@@ -516,6 +522,8 @@
       turns: snapshot.turnCount, userTurn: Boolean(snapshot.userId), replyTurn: Boolean(snapshot.assistantId),
       replyActions: snapshot.finalActions, busy: Boolean(snapshot.busy), idleControl: snapshot.idle,
       observedStop: Boolean(run?.sawStop), ready: snapshot.done,
+      sentPromptConfirmed: Boolean(record?.flight?.userId), checkingIdle: Boolean(run?.idleCandidate),
+      status,
       queued: record?.queue.length ?? 0
     }, null, 2);
     report.focus();
@@ -530,13 +538,17 @@
     });
   });
   observer = new MutationObserver(() => {
+    if (run?.watchedForm && run.observedFlight === record?.flight?.id && key === keyForPage() &&
+        !run.sawStop && hasStop(run.watchedForm)) {
+      run.sawStop = true;
+    }
     if (timer === undefined && (run || key !== keyForPage() || !host.isConnected || !host.nextElementSibling?.matches("form"))) {
       schedule(100);
     }
   });
   observer.observe(document.body, {
     subtree: true, childList: true, attributes: true,
-    attributeFilter: ["aria-label", "aria-busy", "disabled", "data-is-streaming", "data-streaming"]
+    attributeFilter: ["aria-label", "aria-busy", "disabled", "hidden", "data-testid", "data-test-id", "data-is-streaming", "data-streaming"]
   });
   const options = {signal: lifecycle.signal};
   window.addEventListener("popstate", () => schedule(), options);

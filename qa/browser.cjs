@@ -10,7 +10,8 @@ function mock() {
   const rollout = location.pathname.endsWith("-rollout");
   const toolbar = location.pathname.endsWith("-toolbar");
   const manual = location.pathname.endsWith("-manual");
-  const controls = location.pathname.endsWith("-controls");
+  const earlyStop = location.pathname.endsWith("-earlystop");
+  const controls = earlyStop || location.pathname.endsWith("-controls");
   window.pastesWithoutFocus = 0;
   const editor = document.querySelector("#prompt-textarea");
   const send = document.querySelector("[data-testid=send-button]");
@@ -78,11 +79,13 @@ function mock() {
     setRole(user, "user", "u" + window.sent.length);
     user.style.whiteSpace = "pre-wrap";
     user.textContent = text;
-    messages.append(user);
+    if (earlyStop) setTimeout(() => messages.append(user), 700);
+    else messages.append(user);
     if (prose) prose.clear();
     else editor.replaceChildren();
     send.disabled = true;
     stop.hidden = false;
+    if (earlyStop) setTimeout(() => { stop.hidden = true; }, 100);
   };
   window.think = () => {
     stop.hidden = true;
@@ -152,9 +155,10 @@ async function main() {
     const rollout = Boolean(process.env.GPT_BULK_ROLLOUT);
     const toolbar = Boolean(process.env.GPT_BULK_TOOLBAR);
     const manual = Boolean(process.env.GPT_BULK_MANUAL);
-    const controls = Boolean(process.env.GPT_BULK_CONTROLS);
+    const earlyStop = Boolean(process.env.GPT_BULK_EARLY_STOP);
+    const controls = earlyStop || Boolean(process.env.GPT_BULK_CONTROLS);
     const target = "https://chatgpt.com/c/test-conversation" +
-      (controls ? "-controls" : manual ? "-manual" : toolbar ? "-toolbar" : rollout ? "-rollout" : "");
+      (earlyStop ? "-earlystop" : controls ? "-controls" : manual ? "-manual" : toolbar ? "-toolbar" : rollout ? "-rollout" : "");
     const editorSelector = rollout || toolbar || controls ? '[aria-label="Chat with ChatGPT"]' : "#prompt-textarea";
     await tab.goto(target);
     await tab.getByText("GPT Bulk", {exact: true}).click();
@@ -230,12 +234,13 @@ async function main() {
     await other.getByText("GPT Bulk", {exact: true}).click();
     await other.locator("button#start").evaluate(button => button.click());
     assert.deepEqual(await other.evaluate(() => window.sent), []);
-    if (controls) await tab.getByText("Waiting for ChatGPT to finish…", {exact: true}).waitFor();
+    if (earlyStop) await confirm.waitFor();
+    else if (controls) await tab.getByText("Waiting for ChatGPT to finish…", {exact: true}).waitFor();
     await tab.evaluate(() => window.think());
     if (controls) await tab.evaluate(() => window.setIdle(true));
     await tab.waitForTimeout(2200);
     assert.deepEqual(await tab.evaluate(() => window.sent), [first]);
-    if (controls) {
+    if (controls && !earlyStop) {
       await tab.evaluate(() => window.setIdle(false));
       await tab.waitForTimeout(900);
       await tab.evaluate(() => window.setIdle(true));
@@ -244,8 +249,9 @@ async function main() {
     } else if (manual) {
       await confirm.waitFor();
       await confirm.evaluate(button => button.click());
-    } else await tab.evaluate(() => window.finish());
+    } else if (!earlyStop) await tab.evaluate(() => window.finish());
     await tab.waitForFunction(() => window.sent.length === 2, null, {polling: 100});
+    if (earlyStop) await confirm.waitFor();
     await tab.evaluate(() => { window.think(); window.finish(); });
     await tab.getByText("Queue complete.", {exact: true}).waitFor();
     assert.deepEqual(await tab.evaluate(() => window.sent), [first, "Second prompt"]);
