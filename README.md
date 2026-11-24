@@ -4,7 +4,7 @@ Queue text prompts in a ChatGPT conversation and let them run in order while you
 
 [Product website and download](https://gptbulk-extension.vercel.app) · [Privacy policy](https://gptbulk-extension.vercel.app/privacy)
 
-Version 1.0.3 recognizes more of ChatGPT’s reply toolbars, including controls that appear on hover. If you already installed GPT Bulk, update the files in the same folder, select **Reload** in your browser’s extension manager, then refresh ChatGPT. If the queue still waits on a completed reply, open **Troubleshooting → Show diagnostics**. The report contains no conversation text, prompts, or conversation IDs.
+Version 1.0.4 places GPT Bulk above the ChatGPT composer. If you already installed GPT Bulk, update the files in the same folder, select **Reload** in your browser’s extension manager, then refresh ChatGPT. The **Diagnostics** button shows a report containing no conversation text, prompts, or conversation IDs.
 
 ## Install
 
@@ -23,9 +23,11 @@ For a temporary Firefox installation, open **about:debugging**, choose **This Fi
 ## Use the queue
 
 1. Open an existing conversation on **chatgpt.com**. In a new chat, send the first message manually to create the conversation.
-2. Open **GPT Bulk** in the lower right. Type or paste one prompt at a time and select **Add prompt**. Ctrl+Enter or Cmd+Enter also adds the prompt.
+2. Open **GPT Bulk** above the ChatGPT message box. Type or paste one prompt at a time and select **Add prompt**. Ctrl+Enter or Cmd+Enter also adds the prompt.
 3. Select **Start**. Keep the conversation tab open. You can switch tabs while the queue runs.
 4. If GPT Bulk pauses after an uncertain send, check the conversation. Use **Remove sent prompt** if the prompt appeared or **Keep for retry** if it did not. Check for leftover draft text before restarting.
+
+If GPT Bulk cannot confirm that a reply finished, it offers **I checked: ChatGPT finished**. Use this only after confirming the reply is complete. It applies to the current reply. The extension checks the next reply separately.
 
 Queues are stored locally by conversation. A reload or closed tab pauses processing. Chrome can suspend background tabs and a sleeping computer pauses execution. Prompts go through the ChatGPT website using your existing session and its usage limits. The extension uses no API key or external server.
 

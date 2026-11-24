@@ -8,11 +8,13 @@ function mock() {
   window.sent = [];
   const rollout = location.pathname.endsWith("-rollout");
   const toolbar = location.pathname.endsWith("-toolbar");
+  const manual = location.pathname.endsWith("-manual");
   window.pastesWithoutFocus = 0;
   const editor = document.querySelector("#prompt-textarea");
   const send = document.querySelector("[data-testid=send-button]");
   const stop = document.querySelector("[data-testid=stop-button]");
   const messages = document.querySelector("main");
+  if (manual) messages.querySelector("button").remove();
   function setRole(node, role, id) {
     if (toolbar) {
       const turn = role === "assistant" && node.parentElement?.matches("article") ? node.parentElement : node;
@@ -110,17 +112,17 @@ async function main() {
     tab.setDefaultTimeout(10000);
     const rollout = Boolean(process.env.GPT_BULK_ROLLOUT);
     const toolbar = Boolean(process.env.GPT_BULK_TOOLBAR);
-    const target = "https://chatgpt.com/c/test-conversation" + (toolbar ? "-toolbar" : rollout ? "-rollout" : "");
+    const manual = Boolean(process.env.GPT_BULK_MANUAL);
+    const target = "https://chatgpt.com/c/test-conversation" + (manual ? "-manual" : toolbar ? "-toolbar" : rollout ? "-rollout" : "");
     const editorSelector = rollout || toolbar ? '[aria-label="Chat with ChatGPT"]' : "#prompt-textarea";
     await tab.goto(target);
     await tab.getByText("GPT Bulk", {exact: true}).click();
+    assert.equal(await tab.locator("[data-inline] + form").count(), 1);
     if (toolbar) {
-      await tab.getByText("Troubleshooting", {exact: true}).click();
-      await tab.getByRole("button", {name: "Show diagnostics"}).click();
+      await tab.getByRole("button", {name: "Diagnostics"}).click();
       const report = JSON.parse(await tab.getByRole("textbox", {name: "GPT Bulk diagnostics"}).inputValue());
       assert.equal(report.replyActions, true);
       assert.equal(report.ready, true);
-      await tab.getByText("Troubleshooting", {exact: true}).click();
     }
     const add = async text => {
       const box = tab.getByRole("textbox", {name: "Prompt to queue"});
@@ -158,6 +160,13 @@ async function main() {
       }, editorSelector);
     }
     await tab.locator("button#start").evaluate(button => button.click());
+    const confirm = tab.getByRole("button", {name: "I checked: ChatGPT finished"});
+    if (manual) {
+      await confirm.waitFor();
+      await tab.waitForTimeout(1700);
+      assert.deepEqual(await tab.evaluate(() => window.sent), []);
+      await confirm.evaluate(button => button.click());
+    }
     try {
       await tab.waitForFunction(() => window.sent.length === 1, null, {polling: 100});
     } catch (error) {
@@ -172,7 +181,10 @@ async function main() {
     await tab.evaluate(() => window.think());
     await tab.waitForTimeout(2200);
     assert.deepEqual(await tab.evaluate(() => window.sent), [first]);
-    await tab.evaluate(() => window.finish());
+    if (manual) {
+      await confirm.waitFor();
+      await confirm.evaluate(button => button.click());
+    } else await tab.evaluate(() => window.finish());
     await tab.waitForFunction(() => window.sent.length === 2, null, {polling: 100});
     await tab.evaluate(() => { window.think(); window.finish(); });
     await tab.getByText("Queue complete.", {exact: true}).waitFor();

@@ -76,8 +76,8 @@
     const attachments = form && (shown('[data-testid*="attachment-preview"], [data-testid*="file-preview"], button[aria-label^="Remove file"], button[aria-label^="Remove attachment"]', form).length ||
       [...form.querySelectorAll('input[type="file"]')].some(node => node.files?.length));
     return {
-      editor, send, user: user?.node, userId: user?.id, assistantId: turn && assistant.id,
-      replyText: finalActions ? assistant.node.textContent : "",
+      editor, form, send, user: user?.node, userId: user?.id, assistantId: turn && assistant.id,
+      replyText: turn ? assistant.node.textContent : "",
       done: Boolean(editor && form && user && finalActions && !busy && !problem),
       finalActions, turnCount: messages.length,
       waitingFor: !editor || !form ? "the ChatGPT message composer" :
@@ -90,28 +90,43 @@
   const panel = host.attachShadow({mode: "open"});
   panel.innerHTML = `
     <style>
-      :host{all:initial;position:fixed;right:16px;bottom:40px;z-index:2147483647;color-scheme:light dark;font:14px system-ui}
-      .queue-panel{width:min(350px,calc(100vw - 32px));background:Canvas;color:CanvasText;border:1px solid GrayText;border-radius:14px;box-shadow:0 8px 30px #0003}
-      .queue-panel:not([open]){width:max-content} summary{cursor:pointer;padding:12px 16px;font-weight:700}
-      section{padding:0 12px 12px} textarea{box-sizing:border-box;width:100%;min-height:90px;resize:vertical;border-radius:8px;padding:8px}
-      button{font:inherit;cursor:pointer;border-radius:7px;padding:5px 9px;margin:3px 3px 3px 0}
-      ol{padding-left:22px;max-height:190px;overflow:auto} li{white-space:pre-wrap;overflow-wrap:anywhere} p{margin:8px 0}
+      :host{all:initial;position:fixed;right:16px;bottom:40px;z-index:2147483647;color-scheme:light dark;font:14px/1.5 system-ui;color:CanvasText}
+      :host([data-inline]){position:relative;inset:auto;z-index:auto;display:block;width:100%;min-width:0;margin:0 0 8px}
+      .queue-panel{width:min(410px,calc(100vw - 32px));box-sizing:border-box;background:Canvas;border:1px solid color-mix(in srgb, CanvasText 22%, Canvas);border-radius:16px;box-shadow:0 8px 24px #0002}
+      :host([data-inline]) .queue-panel{width:100%;box-shadow:none}
+      .queue-panel:not([open]){width:max-content} summary{cursor:pointer;padding:9px 14px;font-weight:700}
+      #count{font-weight:500;opacity:.75;margin-left:8px} section{padding:0 12px 12px}
+      textarea{font:inherit;box-sizing:border-box;width:100%;min-height:62px;resize:vertical;border:1px solid color-mix(in srgb, CanvasText 26%, Canvas);border-radius:10px;padding:8px;background:Canvas;color:CanvasText}
+      button{font:inherit;font-weight:600;cursor:pointer;border:1px solid color-mix(in srgb, CanvasText 24%, Canvas);border-radius:999px;padding:5px 11px;background:Canvas;color:CanvasText}
+      button:disabled{opacity:.45;cursor:default} button:focus-visible,summary:focus-visible,textarea:focus-visible{outline:2px solid #538ce7;outline-offset:2px}
+      #start{background:CanvasText;color:Canvas} #confirm{margin:7px 0} #diagnostics{margin-left:auto}
+      .actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0} ol{margin:8px 0 0;padding-left:24px;max-height:108px;overflow:auto}
+      li{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0} li button{padding:2px 8px;margin-left:8px;font-size:12px}
+      p{margin:4px 0 8px} [hidden]{display:none!important}
     </style>
-    <details class="queue-panel"><summary>GPT Bulk</summary><section>
+    <details class="queue-panel"><summary><span>GPT Bulk</span><span id="count"></span></summary><section>
       <p id="status" role="status"></p>
       <textarea aria-label="Prompt to queue" placeholder="Write or paste a prompt"></textarea>
-      <div><button id="add">Add prompt</button><button id="start">Start</button><button id="pause">Pause</button></div>
+      <div class="actions"><button id="add">Add prompt</button><button id="start">Start</button><button id="pause">Pause</button><button id="diagnostics">Diagnostics</button></div>
+      <button id="confirm" hidden>I checked: ChatGPT finished</button>
       <div id="resolve" hidden><button id="sent">Remove sent prompt</button><button id="retry">Keep for retry</button></div>
       <ol></ol>
-      <details><summary>Troubleshooting</summary><button id="diagnostics">Show diagnostics</button>
-      <textarea id="report" aria-label="GPT Bulk diagnostics" readonly hidden></textarea></details>
+      <textarea id="report" aria-label="GPT Bulk diagnostics" readonly hidden></textarea>
     </section></details>`;
   document.body.append(host);
   const ui = id => panel.getElementById(id);
   const input = find("textarea", panel);
   const list = find("ol", panel);
   const instance = crypto.randomUUID();
-  let key, record, status, run, timer, serial = Promise.resolve();
+  let key, record, status, run, timer, renderedQueue, serial = Promise.resolve();
+
+  function mount() {
+    const editor = shown(editorSelector + ', :is(' + composerSelector + ') [contenteditable="true"]:is(.ProseMirror, [role="textbox"])');
+    const form = editor.length === 1 && (editor[0].closest(composerSelector) || editor[0].closest("form"));
+    if (form?.parentElement && host.nextElementSibling !== form) form.before(host);
+    if (!form && host.parentElement !== document.body) document.body.append(host);
+    host.toggleAttribute("data-inline", Boolean(form));
+  }
 
   const load = async id => (await api.storage.local.get(id))[id] ?? {queue: [], flight: null};
   const save = (id, state) => api.storage.local.set({[id]: state});
@@ -119,10 +134,15 @@
 
   function render() {
     ui("status").textContent = status;
+    ui("count").textContent = record?.queue.length ? record.queue.length + " queued" : "";
     ui("add").disabled = !record;
     ui("start").disabled = Boolean(run || !record?.queue.length || (record.flight && record.flight.owner !== instance));
     ui("pause").disabled = !run;
     ui("resolve").hidden = Boolean(run || !record?.flight);
+    ui("confirm").hidden = !run?.canConfirm;
+    const queueState = JSON.stringify([record?.flight?.id, (record?.queue ?? []).map(item => item.id)]);
+    if (queueState === renderedQueue) return;
+    renderedQueue = queueState;
     list.replaceChildren();
     for (const item of record?.queue ?? []) {
       const row = document.createElement("li");
@@ -190,8 +210,9 @@
     });
   }
 
+  const identityOf = snapshot => JSON.stringify([snapshot.userId, snapshot.assistantId, snapshot.replyText]);
   function settled(active, snapshot) {
-    const identity = JSON.stringify([snapshot.userId, snapshot.assistantId, snapshot.replyText]);
+    const identity = identityOf(snapshot);
     if (active.identity !== identity) {
       active.identity = identity;
       active.since = performance.now();
@@ -235,7 +256,16 @@
     record = state;
     const snapshot = page();
     const flight = state.flight;
+    active.canConfirm = false;
     if (snapshot.problem) return pause("ChatGPT needs attention. Check the conversation before resuming.");
+    if (snapshot.busy) active.confirmed = null;
+    const canProceed = candidate => candidate.done || Boolean(
+      active.confirmed && candidate.editor && candidate.form && !candidate.busy && !candidate.problem &&
+      active.confirmed === identityOf(candidate));
+    const offerConfirmation = () => {
+      active.canConfirm = Boolean(snapshot.editor && snapshot.form && !snapshot.busy);
+      if (active.canConfirm) status = "ChatGPT’s finish signal is unavailable. If the reply is complete, confirm below.";
+    };
     if (flight) {
       if (flight.owner !== instance) return pause("Resolve the previous send before continuing.");
       if (!flight.userId && snapshot.userId && snapshot.userId !== flight.previousUserId) {
@@ -249,12 +279,10 @@
       if (flight.userId && snapshot.userId !== flight.userId) return pause("The conversation changed while waiting for ChatGPT.");
       if (!flight.userId && Date.now() - flight.started > 45000) return pause("Could not confirm the send. Check whether the prompt appeared.");
       status = flight.userId ? "Waiting for ChatGPT to finish…" : "Confirming the send…";
-      if (!flight.userId || !snapshot.done) {
+      if (!flight.userId || !canProceed(snapshot)) {
         active.identity = null;
         if (snapshot.busy) active.lastBusy = Date.now();
-        else if (flight.userId && Date.now() - active.lastBusy > 45000) {
-          pause("Could not verify that ChatGPT finished the reply. Check the chat before continuing.");
-        }
+        else if (flight.userId) offerConfirmation();
         return;
       }
       if (!settled(active, snapshot)) return;
@@ -264,10 +292,11 @@
       return;
     }
     if (!state.queue.length) return pause("Queue complete.");
-    if (!snapshot.done) {
+    if (!canProceed(snapshot)) {
       active.identity = null;
       status = snapshot.busy ? "Waiting for ChatGPT to finish…" : "Waiting for " + snapshot.waitingFor + "…";
       if (snapshot.busy) active.lastBusy = Date.now();
+      else if (snapshot.editor && snapshot.form) offerConfirmation();
       else if (Date.now() - active.lastBusy > 45000) pause("Could not find " + snapshot.waitingFor + ". Refresh ChatGPT and resume.");
       return;
     }
@@ -276,7 +305,7 @@
     const item = state.queue[0];
     state.flight = {id: item.id, text: item.text, owner: instance, previousUserId: snapshot.userId, started: Date.now()};
     await save(id, state);
-    const ready = candidate => stillActive() && candidate.done && candidate.userId === snapshot.userId &&
+    const ready = candidate => stillActive() && canProceed(candidate) && candidate.userId === snapshot.userId &&
       candidate.assistantId === snapshot.assistantId && !candidate.attachments;
     const before = page();
     let issue = "ChatGPT changed before the draft could be prepared.";
@@ -293,6 +322,7 @@
           issue = draft === "" ? "ChatGPT did not accept the draft." : "The ChatGPT draft differs from the queued prompt.";
         } else if (after.send && !after.send.disabled && after.send.getAttribute("aria-disabled") !== "true") {
           active.identity = null;
+          active.confirmed = null;
           status = "Confirming the send…";
           after.send.click();
           return;
@@ -308,6 +338,7 @@
   }
 
   async function tick() {
+    mount();
     await sync();
     const active = run;
     if (!active?.release) return;
@@ -338,6 +369,16 @@
     }).catch(() => { if (run === active) pause("This browser could not start the queue safely."); });
   };
   ui("pause").onclick = () => pause("Queue paused. Any reply already underway can finish.");
+  ui("confirm").onclick = () => {
+    if (!run?.canConfirm || key !== keyForPage()) return;
+    const snapshot = page();
+    if (!snapshot.editor || !snapshot.form || snapshot.busy || snapshot.problem) return schedule();
+    run.confirmed = identityOf(snapshot);
+    run.canConfirm = false;
+    status = "Reply confirmed. Checking the composer…";
+    render();
+    schedule();
+  };
   ui("add").onclick = () => {
     const text = input.value;
     if (!text.trim()) return;
@@ -390,6 +431,7 @@
       replyActions: snapshot.finalActions, busy: Boolean(snapshot.busy), ready: snapshot.done,
       queued: record?.queue.length ?? 0
     }, null, 2);
+    report.focus();
     report.select();
   };
   api.storage.onChanged.addListener((changes, area) => {
@@ -401,7 +443,9 @@
     });
   });
   new MutationObserver(() => {
-    if ((run || key !== keyForPage()) && timer === undefined) schedule();
+    if (timer === undefined && (run || key !== keyForPage() || !host.isConnected || !host.nextElementSibling?.matches("form"))) {
+      schedule(100);
+    }
   }).observe(document.body, {
     subtree: true, childList: true, attributes: true,
     attributeFilter: ["aria-label", "aria-busy", "disabled", "data-is-streaming", "data-streaming"]
